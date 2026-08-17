@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "thresholdSeconds": 600,
+  "notify": {
+    "completed": true,
+    "failed": true,
+    "cancelled": true,
+    "inputRequired": true
+  },
+  "retry": {
+    "maxAttempts": 3,
+    "baseDelayMs": 1000,
+    "maxDelayMs": 30000
+  },
+  "channels": [
+    {
+      "type": "smtp",
+      "id": "default-email",
+      "host": "smtp.example.com",
+      "port": 587,
+      "secure": false,
+      "requireTls": true,
+      "from": "dsh@example.com",
+      "to": ["you@example.com"],
+      "username": "dsh@example.com",
+      "passwordRef": "DSH_NOTICE_SMTP_PASSWORD"
+    },
+    {
+      "type": "webhook",
+      "id": "default-webhook",
+      "url": "https://notify.example.com/dsh",
+      "secretRef": "DSH_NOTICE_WEBHOOK_SECRET"
+    }
+  ]
+}

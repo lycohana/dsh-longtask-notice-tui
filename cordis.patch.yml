@@ -1,0 +1,4 @@
+# Mount the runtime plugin into a dsh-TUI profile.
+- insert:
+    - id: longtask-notice-tui
+      name: '@dsh-tui-ecosystem/longtask-notice-tui'
