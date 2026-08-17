@@ -59,6 +59,7 @@ function turnEndToTaskEvent(
     taskId: turnId(session, event.data.turn),
     sessionId: sessionScope(session),
     occurredAt: iso(event.time),
+    lastReply: lastAssistantReply(session, event.data.turn, event.seq),
   };
 
   if (reason.kind === "blocked") {
@@ -127,6 +128,22 @@ function eventId(session: Session, sequence: number): string {
   return `${sessionScope(session)}:${sequence}`;
 }
 
+function lastAssistantReply(session: Session, turn: number, beforeSequence: number): string | undefined {
+  for (let index = session.events.length - 1; index >= 0; index -= 1) {
+    const event = session.events[index];
+    if (event === undefined || event.seq > beforeSequence || event.type !== "assistant/message" || event.data.turn !== turn) {
+      continue;
+    }
+    const reply = event.data.message.content
+      .filter((block) => block.type === "text")
+      .map((block) => block.text)
+      .join("\n");
+    const normalized = safeReply(reply);
+    if (normalized) return normalized;
+  }
+  return undefined;
+}
+
 function iso(time: number): string {
   return new Date(time).toISOString();
 }
@@ -134,6 +151,14 @@ function iso(time: number): string {
 function safeText(value: string, fallback: string): string {
   const normalized = value.replace(/[\u0000-\u001f\u007f\r\n]+/g, " ").trim().slice(0, 1024);
   return normalized || fallback;
+}
+
+function safeReply(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 12000);
 }
 
 function safeToken(value: string, fallback: string): string {

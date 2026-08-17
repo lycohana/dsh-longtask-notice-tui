@@ -54,6 +54,9 @@ export function validateTaskEvent(event: TaskEvent): TaskEvent {
   if (event.summary && event.summary.length > 1024) {
     throw new InvalidTaskEventError("summary is too long");
   }
+  if (event.lastReply !== undefined && !isSafeReply(event.lastReply, 12000)) {
+    throw new InvalidTaskEventError("lastReply is invalid or too long");
+  }
   if (event.error) {
     if (!isSafeSummary(event.error.code, 128) || !isSafeSummary(event.error.summary, 1024)) {
       throw new InvalidTaskEventError("invalid error payload");
@@ -84,4 +87,10 @@ function assertDate(value: string, field: string): void {
 
 function isSafeSummary(value: string, maxLength: number): boolean {
   return typeof value === "string" && value.length > 0 && value.length <= maxLength && !/[\r\n]/.test(value);
+}
+
+function isSafeReply(value: string, maxLength: number): boolean {
+  return typeof value === "string"
+    && value.length <= maxLength
+    && !/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(value);
 }

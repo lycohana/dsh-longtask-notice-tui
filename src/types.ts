@@ -14,6 +14,8 @@ export type NotificationType =
   | "input_required"
   | "test";
 
+export type NoticeLanguage = "zh" | "en";
+
 export interface TaskError {
   code: string;
   summary: string;
@@ -37,6 +39,7 @@ export interface TaskEvent {
   occurredAt: string;
   startedAt?: string;
   summary?: string;
+  lastReply?: string;
   error?: TaskError;
   request?: InputRequest;
 }
@@ -44,11 +47,13 @@ export interface TaskEvent {
 export interface SmtpChannelConfig {
   type: "smtp";
   id: string;
+  enabled?: boolean;
   host: string;
   port: number;
   secure: boolean;
   requireTls?: boolean;
-  from: string;
+  from?: string;
+  displayName?: string;
   to: string[];
   username?: string;
   passwordRef?: string;
@@ -58,6 +63,7 @@ export interface SmtpChannelConfig {
 export interface WebhookChannelConfig {
   type: "webhook";
   id: string;
+  enabled?: boolean;
   url: string;
   headers?: Record<string, string>;
   secretRef?: string;
@@ -66,7 +72,20 @@ export interface WebhookChannelConfig {
   allowPrivateNetwork?: boolean;
 }
 
-export type ChannelConfig = SmtpChannelConfig | WebhookChannelConfig;
+export interface BarkChannelConfig {
+  type: "bark";
+  id: string;
+  enabled?: boolean;
+  /** Bark server base URL; defaults to https://api.day.app. */
+  apiUrl?: string;
+  /** Secret reference containing the Bark device_key. */
+  deviceKeyRef?: string;
+  timeoutMs?: number;
+  allowInsecureHttp?: boolean;
+  allowPrivateNetwork?: boolean;
+}
+
+export type ChannelConfig = SmtpChannelConfig | WebhookChannelConfig | BarkChannelConfig;
 
 export interface NotificationConfig {
   enabled?: boolean;
@@ -104,10 +123,12 @@ export interface NormalizedConfig {
 
 export interface NotificationMessage {
   type: NotificationType;
+  language?: NoticeLanguage;
   taskId: string;
   sessionId: string;
   state: TaskEventType | "test";
   summary: string;
+  lastReply?: string;
   occurredAt: string;
   startedAt?: string;
   durationMs?: number;
@@ -155,6 +176,7 @@ export interface TaskRecord {
   lastEventAt: string;
   state: TrackedTaskState;
   summary?: string;
+  lastReply?: string;
   error?: TaskError;
   request?: InputRequest;
   processedEventIds: string[];

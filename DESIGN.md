@@ -9,9 +9,10 @@ turn/start
     |
     +-- duration >= threshold --> 标记 long_running，不发送通知
     |
-    +-- turn/end: completed --------------------> 最终状态通知
-    +-- turn/end: error/max-tokens/interrupted --> 失败通知
-    +-- turn/end: aborted ----------------------> 取消通知
+    +-- turn/end before threshold --------------> 不发送最终通知
+    +-- turn/end: completed after threshold ---> 最终状态通知
+    +-- turn/end: error/max-tokens/interrupted -> 失败通知
+    +-- turn/end: aborted after threshold -----> 取消通知
     +-- turn/end: blocked ----------------------> 立即发送输入请求通知
 ```
 
@@ -82,17 +83,27 @@ Delivery: pending -> sending -> sent
 
 如果用户明确使用内网 Webhook，必须同时配置 `allowPrivateNetwork`；如果明确使用 HTTP，必须同时配置 `allowInsecureHttp`。这两个开关是有意显式的风险确认。
 
+### Bark
+
+Bark 使用 `https://api.day.app` 作为默认服务地址，也支持自定义 Bark Server。插件将基础地址规范化为 `/push`，通过 JSON body 发送 `device_key`、当前语言标题和正文。`device_key` 只经由 `SecretProvider` 读取；面板输入后写入 dsh credentials，配置只保留 `deviceKeyRef`。自定义地址沿用 Webhook 的 HTTPS、DNS 解析、私网拒绝、超时和禁止重定向策略。
+
 ## 5. 配置与 `/notice` 命令
 
 非敏感配置包括阈值、通知类型开关、重试上限和 channel 配置，示例见 [config.example.json](config.example.json)。secret 不写入普通配置或状态文件。
 
-插件通过 `ctx.inject(["commands"], ...)` 注册一个 dsh 命令 `notice`，因此 TUI 中的入口是：
+插件通过 `ctx.inject(["commands"], ...)` 注册一个 dsh 命令 `notice`，并在宿主提供
+`tuiPanels` 时注册一个嵌入式半屏面板。因此 TUI 中的入口是：
 
-- `/notice` 或 `/notice status`：查看启用状态、阈值、任务和投递统计；
+- `/notice` 或 `/notice ui`：在聊天上方打开半屏设置面板；
+- `/notice status`：查看启用状态、阈值、任务和投递统计；
 - `/notice on`、`/notice off`：启用或停用通知；
 - `/notice threshold <seconds>`：修改长任务阈值；
-- `/notice test`：测试所有已配置渠道；
+- `/notice test [channel-id]`：测试所有已启用渠道，或测试指定渠道；SMTP 渠道会实际发送测试邮件；
 - `/notice help`：显示用法。
+
+面板保持 Chat 挂载，只在打开期间接管键盘，不创建全屏 Scene。面板负责渠道选择、启用/停用、SMTP/Webhook/Bark 新增、编辑、删除和测试；选中渠道后按 `e` 编辑，选中 SMTP 渠道按 `t` 会实际发送测试邮件，选中 Bark 渠道按 `t` 会实际发送 Bark 测试通知。测试在后台异步执行，失败结果显示渠道 ID 和清理后的错误原因。保存时通过 dsh credentials 写入 secret，配置只保存 `passwordRef`/`secretRef`/`deviceKeyRef`。
+
+面板接收宿主当前的 `zh`/`en` 语言状态，所有标题、字段、快捷键提示、状态和错误文案随 TUI 语言切换。最终通知优先使用该 turn 最后一条可见助手回复；SMTP 和 Bark 模板只使用当前 TUI 语言，并将回复置于任务详情之前，Webhook 则通过 `lastReply` 字段传递同一内容。
 
 启停和阈值优先写入 dsh `settings` 的 `longtask-notice` 命名空间，并通过 settings watcher 热更新 engine。没有 settings service 时只做进程内回退。命令只访问 engine，不依赖单一 Presentation。
 
@@ -114,6 +125,7 @@ Delivery: pending -> sending -> sent
 - 有界重试；
 - 默认配置、Webhook URL 校验、SMTP header 注入校验；
 - Webhook HMAC、幂等 header 和私网地址拒绝。
+- Bark 官方 API 默认地址、自定义服务地址、device_key payload 和私网地址拒绝。
 
 后续可补充：真实 Cordis host fixture、session restore/dispose 集成测试、SMTP transport fixture、通知模板和宿主 secret-store 接口。
 
@@ -123,7 +135,7 @@ Delivery: pending -> sending -> sent
 
 - 从 dsh-TUI 的 Cordis plugin contract 建立 TypeScript/ESM 包结构。
 - 对接 `session/event`、`session/created` 和 `session/disposed`。
-- 实现 10 分钟默认策略、终态/阻塞通知、SMTP、Webhook、重试和幂等。
+- 实现 10 分钟默认策略、终态/阻塞通知、SMTP、Webhook、Bark、重试和幂等。
 - 增加配置 schema、`/notice` 命令、settings 持久化、测试、debug 日志和安全边界文档。
 
 本仓库不声明 dsh-ecosystem-spec Community conformance，因为该公共 registry 尚未定义本插件所需的 task lifecycle 和出站通知能力。

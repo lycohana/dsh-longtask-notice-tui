@@ -4,6 +4,10 @@
   "description": "Long-task status notifications for dsh-TUI",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lycohana/dsh-longtask-notice-tui.git"
+  },
   "engines": {
     "node": "^22.19 || >=24"
   },
@@ -33,7 +37,8 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "tsx --test \"tests/**/*.test.ts\"",
-    "check": "npm run typecheck && npm test"
+    "check": "npm run typecheck && npm test",
+    "prepare": "npm run build"
   },
   "dsh": {
     "bundle": {

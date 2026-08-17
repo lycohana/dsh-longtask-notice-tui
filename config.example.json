@@ -16,11 +16,13 @@
     {
       "type": "smtp",
       "id": "default-email",
+      "enabled": true,
       "host": "smtp.example.com",
       "port": 587,
       "secure": false,
       "requireTls": true,
-      "from": "dsh@example.com",
+      "from": "",
+      "displayName": "dsh-TUI",
       "to": ["you@example.com"],
       "username": "dsh@example.com",
       "passwordRef": "DSH_NOTICE_SMTP_PASSWORD"
@@ -28,8 +30,16 @@
     {
       "type": "webhook",
       "id": "default-webhook",
+      "enabled": true,
       "url": "https://notify.example.com/dsh",
       "secretRef": "DSH_NOTICE_WEBHOOK_SECRET"
+    },
+    {
+      "type": "bark",
+      "id": "default-bark",
+      "enabled": true,
+      "apiUrl": "https://api.day.app",
+      "deviceKeyRef": "DSH_NOTICE_BARK_DEVICE_KEY"
     }
   ]
 }
