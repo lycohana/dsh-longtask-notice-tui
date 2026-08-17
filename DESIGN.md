@@ -82,18 +82,19 @@ Delivery: pending -> sending -> sent
 
 如果用户明确使用内网 Webhook，必须同时配置 `allowPrivateNetwork`；如果明确使用 HTTP，必须同时配置 `allowInsecureHttp`。这两个开关是有意显式的风险确认。
 
-## 5. 配置与命令
+## 5. 配置与 `/notice` 命令
 
 非敏感配置包括阈值、通知类型开关、重试上限和 channel 配置，示例见 [config.example.json](config.example.json)。secret 不写入普通配置或状态文件。
 
-可选 commands service 存在时，插件注册：
+插件通过 `ctx.inject(["commands"], ...)` 注册一个 dsh 命令 `notice`，因此 TUI 中的入口是：
 
-- `longtask-notice-status`
-- `longtask-notice-test`
-- `longtask-notice-enable`
-- `longtask-notice-disable`
+- `/notice` 或 `/notice status`：查看启用状态、阈值、任务和投递统计；
+- `/notice on`、`/notice off`：启用或停用通知；
+- `/notice threshold <seconds>`：修改长任务阈值；
+- `/notice test`：测试所有已配置渠道；
+- `/notice help`：显示用法。
 
-命令只访问 engine，不依赖单一 Presentation；没有 commands service 时插件仍可正常工作。
+启停和阈值优先写入 dsh `settings` 的 `longtask-notice` 命名空间，并通过 settings watcher 热更新 engine。没有 settings service 时只做进程内回退。命令只访问 engine，不依赖单一 Presentation。
 
 ## 6. 安全与隐私边界
 
@@ -123,6 +124,6 @@ Delivery: pending -> sending -> sent
 - 从 dsh-TUI 的 Cordis plugin contract 建立 TypeScript/ESM 包结构。
 - 对接 `session/event`、`session/created` 和 `session/disposed`。
 - 实现 10 分钟默认策略、终态/阻塞通知、SMTP、Webhook、重试和幂等。
-- 增加配置 schema、示例、测试、debug 日志和安全边界文档。
+- 增加配置 schema、`/notice` 命令、settings 持久化、测试、debug 日志和安全边界文档。
 
 本仓库不声明 dsh-ecosystem-spec Community conformance，因为该公共 registry 尚未定义本插件所需的 task lifecycle 和出站通知能力。

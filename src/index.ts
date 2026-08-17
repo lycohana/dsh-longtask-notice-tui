@@ -73,17 +73,54 @@ export const Config: Schemastery<Config> = z.object({
   channels: z.array(channelSchema).default([]),
 });
 
+type NoticeSettings = {
+  enabled: boolean;
+  thresholdSeconds: number;
+};
+
+const NoticeSettingsSchema = z.object({
+  enabled: z.boolean().default(true),
+  thresholdSeconds: z.number().step(1).min(1).max(31536000).default(600),
+});
+
 interface CommandService {
   register(definition: {
     name: string;
     description: string;
-    handler: () => unknown | Promise<unknown>;
+    input?: {hint: string};
+    handler: (invocation: CommandInvocation) => CommandResult | Promise<CommandResult>;
   }): () => void;
 }
 
-interface CommandResult {
-  kind: "success" | "error";
+interface CommandContext {
+  commands: CommandService;
+}
+
+interface CommandInvocation {
+  rawInput?: string;
+  signal?: AbortSignal;
+}
+
+interface CommandResultSuccess {
+  kind: "success";
   text?: string;
+}
+
+interface CommandResultError {
+  kind: "error";
+  text: string;
+}
+
+type CommandResult = CommandResultSuccess | CommandResultError;
+
+interface SettingsScope<T> {
+  get(): T;
+  update(patch: object): Promise<void>;
+  watch(callback: (next: T, previous: T) => void | Promise<void>): () => void;
+}
+
+interface SettingsService {
+  register<T>(namespace: string, schema: unknown, options?: {base?: Partial<T>}): SettingsScope<T>;
 }
 
 const SECRET_ENV_PREFIX = "DSH_NOTICE_";
@@ -112,7 +149,25 @@ export function apply(ctx: Context, config: Config = {}): void {
     createChannels(normalized, environmentSecrets),
     {logger: debugLogger},
   );
+  const settings = registerSettings(ctx, normalized);
   const ready = engine.start();
+  const applySettings = (next: NoticeSettings): Promise<void> => ready.then(() => engine.reloadConfig({
+    ...normalized,
+    enabled: next.enabled,
+    thresholdSeconds: next.thresholdSeconds,
+  }));
+
+  if (settings) {
+    void applySettings(settings.get()).catch((error: unknown) => {
+      debugLogger.error?.("settings initialization failed", {error: errorText(error)});
+    });
+    const unwatch = settings.watch((next) => {
+      void applySettings(next).catch((error: unknown) => {
+        debugLogger.error?.("settings update failed", {error: errorText(error)});
+      });
+    });
+    ctx.effect(() => () => unwatch(), "longtask-notice settings");
+  }
 
   ctx.on("session/created", (session) => {
     const taskEvent = openTurnToTaskEvent(session);
@@ -136,40 +191,23 @@ export function apply(ctx: Context, config: Config = {}): void {
       .catch((error: unknown) => debugLogger.error?.("session cleanup failed", {error: errorText(error)}));
   });
 
-  const commands = ctx.get("commands", false) as CommandService | undefined;
-  if (commands) {
-    const disposers = [
-      commands.register({
-        name: "longtask-notice-status",
-        description: "Show long-task notification status",
-        handler: () => success(JSON.stringify(engine.getStatus())),
-      }),
-      commands.register({
-        name: "longtask-notice-test",
-        description: "Send a test notification through every configured channel",
-        handler: async () => success(JSON.stringify(await engine.testChannels())),
-      }),
-      commands.register({
-        name: "longtask-notice-enable",
-        description: "Enable long-task notifications",
-        handler: async () => {
-          await engine.setEnabled(true);
-          return success("long-task notifications enabled");
-        },
-      }),
-      commands.register({
-        name: "longtask-notice-disable",
-        description: "Disable long-task notifications",
-        handler: async () => {
-          await engine.setEnabled(false);
-          return success("long-task notifications disabled");
-        },
-      }),
-    ];
-    ctx.effect(() => () => {
-      for (const dispose of disposers) dispose();
-    }, "longtask-notice commands");
-  }
+  ctx.inject(["commands"], (commandCtx) => {
+    const commands = (commandCtx as unknown as CommandContext).commands;
+    const dispose = commands.register({
+      name: "notice",
+      description: "Control long-task notifications",
+      input: {hint: "status | on | off | threshold <seconds> | test"},
+      handler: async (invocation) => {
+        try {
+          await ready;
+          return await runNoticeCommand(engine, settings, applySettings, invocation.rawInput ?? "");
+        } catch (error) {
+          return failure(errorText(error));
+        }
+      },
+    });
+    ctx.effect(() => () => dispose(), "longtask-notice commands");
+  });
 
   ctx.effect(() => () => {
     void engine.stop();
@@ -190,6 +228,81 @@ const debugLogger = {
   error: (message: string, details?: Record<string, unknown>) => debugWrite("error", message, details),
 };
 
+function registerSettings(ctx: Context, config: ReturnType<typeof normalizeConfig>): SettingsScope<NoticeSettings> | undefined {
+  const service = ctx.get("settings", false) as SettingsService | undefined;
+  if (!service) return undefined;
+  try {
+    return service.register("longtask-notice", NoticeSettingsSchema, {
+      base: {
+        enabled: config.enabled,
+        thresholdSeconds: config.thresholdSeconds,
+      },
+    });
+  } catch (error) {
+    debugLogger.warn?.("settings service unavailable", {error: errorText(error)});
+    return undefined;
+  }
+}
+
+async function runNoticeCommand(
+  engine: NotifierEngine,
+  settings: SettingsScope<NoticeSettings> | undefined,
+  applySettings: (next: NoticeSettings) => Promise<void>,
+  rawInput: string,
+): Promise<CommandResult> {
+  const parts = rawInput.trim().split(/\s+/u).filter(Boolean);
+  const subcommand = (parts.shift() ?? "status").toLowerCase();
+  switch (subcommand) {
+    case "status":
+      return success(JSON.stringify(engine.getStatus(), null, 2));
+    case "help":
+      return success("Usage: /notice [status|on|off|threshold <seconds>|test]");
+    case "on":
+    case "enable":
+      await updateNoticeSettings(engine, settings, applySettings, {enabled: true});
+      return success("long-task notifications enabled");
+    case "off":
+    case "disable":
+      await updateNoticeSettings(engine, settings, applySettings, {enabled: false});
+      return success("long-task notifications disabled");
+    case "threshold": {
+      const value = parts.length === 1 ? Number(parts[0]) : Number.NaN;
+      if (!Number.isInteger(value) || value < 1 || value > 31536000) {
+        return failure("threshold must be an integer between 1 and 31536000 seconds");
+      }
+      await updateNoticeSettings(engine, settings, applySettings, {thresholdSeconds: value});
+      return success(`long-task threshold set to ${value} seconds`);
+    }
+    case "test":
+      return success(JSON.stringify(await engine.testChannels(), null, 2));
+    default:
+      return failure(`unknown /notice action: ${subcommand}. Use /notice help`);
+  }
+}
+
+async function updateNoticeSettings(
+  engine: NotifierEngine,
+  settings: SettingsScope<NoticeSettings> | undefined,
+  applySettings: (next: NoticeSettings) => Promise<void>,
+  patch: Partial<NoticeSettings>,
+): Promise<void> {
+  if (!settings) {
+    if (patch.enabled !== undefined) {
+      await engine.setEnabled(patch.enabled);
+    }
+    if (patch.thresholdSeconds !== undefined) {
+      const current = engine.getStatus();
+      await applySettings({
+        enabled: current.enabled,
+        thresholdSeconds: patch.thresholdSeconds,
+      });
+    }
+    return;
+  }
+  await settings.update(patch);
+  await applySettings(settings.get());
+}
+
 function debugWrite(level: string, message: string, details?: Record<string, unknown>): void {
   if (process.env.DSH_TUI_DEBUG !== "1") return;
   const suffix = details ? ` ${JSON.stringify(details)}` : "";
@@ -198,6 +311,10 @@ function debugWrite(level: string, message: string, details?: Record<string, unk
 
 function success(text: string): CommandResult {
   return {kind: "success", text};
+}
+
+function failure(text: string): CommandResult {
+  return {kind: "error", text: text || "command failed"};
 }
 
 function errorText(error: unknown): string {

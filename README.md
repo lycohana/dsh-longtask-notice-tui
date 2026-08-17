@@ -44,14 +44,20 @@ DSH_NOTICE_SMTP_PASSWORD=***
 
 Webhook 使用 HTTP POST JSON，带 `X-DSH-Idempotency-Key`。配置 `secretRef` 后还会带 `X-DSH-Signature: sha256=...` HMAC-SHA256 签名。默认只允许 HTTPS，并拒绝解析到本机、内网、链路本地和保留地址；只有明确配置 `allowInsecureHttp` 与 `allowPrivateNetwork` 才会放宽限制。
 
-## 命令
+## `/notice` 命令
 
-当 dsh-TUI 提供可选 commands service 时，插件注册以下命令：
+插件通过 dsh commands registry 注册一个根命令，在 TUI 输入 `/` 后即可看到：
 
-- `longtask-notice-status`
-- `longtask-notice-test`
-- `longtask-notice-enable`
-- `longtask-notice-disable`
+```text
+/notice status
+/notice on
+/notice off
+/notice threshold 600
+/notice test
+/notice help
+```
+
+`on`、`off` 和 `threshold` 会写入 dsh settings；当前运行中的 engine 会立即应用。没有 settings service 的宿主会退化为当前进程内生效。`test` 会通过全部已配置渠道发送测试通知。
 
 ## 开发
 
@@ -61,7 +67,7 @@ npm run check
 npm run build
 ```
 
-插件不向 stdout 输出内容；调试日志仅在 `DSH_TUI_DEBUG=1` 时写入 stderr。状态只在当前插件实例内保存，并在 session 创建时从仍未结束的 turn 恢复；session 结束时清理对应任务。通知本身不包含完整 prompt、transcript 或工具输出。
+插件不向 stdout 输出内容；调试日志仅在 `DSH_TUI_DEBUG=1` 时写入 stderr。状态只在当前插件实例内保存，并在 session 创建时从仍未结束的 turn 恢复；session 结束时清理对应任务。通知本身不包含完整 prompt、transcript 或工具输出。安装或升级后需要重启 dsh-TUI，命令注册才会进入当前 TUI。
 
 ## 兼容性说明
 
