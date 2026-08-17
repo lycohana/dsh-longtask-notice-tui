@@ -10,6 +10,7 @@ import type {
   NotificationConfig,
   NotificationMessage,
   NotificationType,
+  NoticeLanguage,
   PersistedState,
   StateStore,
   TaskEvent,
@@ -29,6 +30,7 @@ export interface ProcessResult {
 export interface EngineOptions {
   clock?: Clock;
   logger?: Logger;
+  language?: NoticeLanguage;
 }
 
 export class NotifierEngine {
@@ -36,6 +38,7 @@ export class NotifierEngine {
   private state: PersistedState = {version: STATE_VERSION, tasks: {}};
   private readonly clock: Clock;
   private readonly logger: Logger;
+  private language: NoticeLanguage;
   private readonly timers = new Map<string, TimerHandle>();
   private queue: Promise<unknown> = Promise.resolve();
   private started = false;
@@ -43,12 +46,13 @@ export class NotifierEngine {
   constructor(
     config: NotificationConfig,
     private readonly store: StateStore,
-    private readonly channels: readonly NotificationChannel[],
+    private channels: readonly NotificationChannel[],
     options: EngineOptions = {},
   ) {
     this.config = normalizeConfig(config);
     this.clock = options.clock ?? systemClock;
     this.logger = options.logger ?? {};
+    this.language = options.language ?? defaultLanguage();
   }
 
   async start(): Promise<void> {
@@ -85,15 +89,22 @@ export class NotifierEngine {
     });
   }
 
-  async reloadConfig(config: NotificationConfig): Promise<void> {
+  async reloadConfig(config: NotificationConfig, channels?: readonly NotificationChannel[]): Promise<void> {
     const normalized = normalizeConfig(config);
     await this.enqueue(async () => {
       this.config = normalized;
+      if (channels !== undefined) {
+        this.channels = channels;
+      }
       for (const record of Object.values(this.state.tasks)) {
         this.scheduleThreshold(record);
       }
       await this.store.save(this.state);
     });
+  }
+
+  setLanguage(language: NoticeLanguage): void {
+    this.language = language;
   }
 
   async forgetSession(sessionId: string): Promise<void> {
@@ -126,28 +137,28 @@ export class NotifierEngine {
     };
   }
 
-  async testChannels(): Promise<{channelId: string; accepted: boolean; detail?: string}[]> {
-    return this.enqueue(async () => {
-      const message: NotificationMessage = {
-        type: "test",
-        taskId: "test-task",
-        sessionId: "test-session",
-        state: "test",
-        summary: "dsh-longtask-notice channel test",
-        occurredAt: new Date(this.clock.now()).toISOString(),
-        idempotencyKey: `test:${this.clock.now()}`,
-      };
-      const results: {channelId: string; accepted: boolean; detail?: string}[] = [];
-      for (const channel of this.channels) {
+  async testChannels(channelIds?: readonly string[], language: NoticeLanguage = this.language): Promise<{channelId: string; accepted: boolean; detail?: string}[]> {
+    const message: NotificationMessage = {
+      type: "test",
+      language,
+      taskId: "test-task",
+      sessionId: "test-session",
+      state: "test",
+      summary: language === "en" ? "dsh-longtask-notice channel test" : "长任务通知渠道测试",
+      occurredAt: new Date(this.clock.now()).toISOString(),
+      idempotencyKey: `test:${this.clock.now()}`,
+    };
+    const selected = channelIds === undefined
+      ? this.channels
+      : this.channels.filter((channel) => channelIds.includes(channel.id));
+    return Promise.all(selected.map(async (channel) => {
         try {
           const result = await channel.send(message);
-          results.push({channelId: channel.id, accepted: result.accepted, detail: result.detail});
+          return {channelId: channel.id, accepted: result.accepted, detail: result.detail};
         } catch (error) {
-          results.push({channelId: channel.id, accepted: false, detail: errorMessage(error)});
+          return {channelId: channel.id, accepted: false, detail: errorMessage(error)};
         }
-      }
-      return results;
-    });
+      }));
   }
 
   private enqueue<T>(operation: () => Promise<T>): Promise<T> {
@@ -176,6 +187,9 @@ export class NotifierEngine {
     rememberEvent(record, event.eventId);
     record.lastEventAt = event.occurredAt;
     record.summary = safeSummary(event.summary ?? record.summary);
+    if (event.lastReply !== undefined) {
+      record.lastReply = safeReply(event.lastReply);
+    }
     if (event.error) {
       record.error = {
         code: safeSummary(event.error.code),
@@ -197,10 +211,15 @@ export class NotifierEngine {
     }
 
     if (isTerminalEvent(event.eventType)) {
+      const shouldNotify = record.state === "long_running"
+        || record.state === "awaiting_input"
+        || hasReachedThreshold(record, event, this.config.thresholdSeconds);
       record.state = terminalState(event.eventType);
       this.clearTimer(record.key);
       await this.store.save(this.state);
-      return this.notify(record, event, terminalStateToNotification(record.state));
+      return shouldNotify
+        ? this.notify(record, event, terminalStateToNotification(record.state))
+        : {duplicate: false, notificationsSent: 0, deliveryFailures: 0};
     }
 
     record.state = "awaiting_input";
@@ -253,7 +272,7 @@ export class NotifierEngine {
     const eventKey = type === "input_required"
       ? `${type}:${event.request?.requestId ?? event.eventId}`
       : type;
-    const message = buildMessage(record, event, type, eventKey, this.clock.now());
+    const message = buildMessage(record, event, type, eventKey, this.clock.now(), this.language);
     let notificationsSent = 0;
     let deliveryFailures = 0;
     for (const channel of this.channels) {
@@ -350,6 +369,7 @@ function createTaskRecord(event: TaskEvent, key: string): TaskRecord {
     lastEventAt: event.occurredAt,
     state: "running",
     summary: safeSummary(event.summary),
+    lastReply: event.lastReply ? safeReply(event.lastReply) : undefined,
     processedEventIds: [],
     deliveries: {},
   };
@@ -368,11 +388,13 @@ function buildMessage(
   type: NotificationType,
   eventKey: string,
   now: number,
+  language: NoticeLanguage,
 ): NotificationMessage {
   const startedAt = record.startedAt;
   const durationMs = Math.max(0, now - Date.parse(startedAt));
   return {
     type,
+    language,
     taskId: record.taskId,
     sessionId: record.sessionId,
     state: event.eventType,
@@ -380,15 +402,28 @@ function buildMessage(
     occurredAt: event.occurredAt,
     startedAt,
     durationMs,
+    lastReply: safeReply(event.lastReply ?? record.lastReply) || undefined,
     error: event.error,
     request: event.request,
     idempotencyKey: `${record.key}:${eventKey}`,
   };
 }
 
+function defaultLanguage(): NoticeLanguage {
+  return process.env.DSH_TUI_LANG?.toLowerCase() === "en" ? "en" : "zh";
+}
+
 function retryDelay(config: NormalizedConfig, attempt: number): number {
   const exponential = config.retry.baseDelayMs * 2 ** Math.max(0, attempt - 1);
   return Math.min(config.retry.maxDelayMs, exponential);
+}
+
+function hasReachedThreshold(record: TaskRecord, event: TaskEvent, thresholdSeconds: number): boolean {
+  const startedAt = Date.parse(record.startedAt);
+  const occurredAt = Date.parse(event.occurredAt);
+  return Number.isFinite(startedAt)
+    && Number.isFinite(occurredAt)
+    && occurredAt - startedAt >= thresholdSeconds * 1000;
 }
 
 function taskKey(sessionId: string, taskId: string): string {
@@ -419,6 +454,14 @@ function terminalStateToNotification(state: TaskTerminalState): NotificationType
 
 function safeSummary(value: string | undefined): string {
   return (value ?? "").replace(/[\u0000-\u001f\u007f\r\n]+/g, " ").slice(0, 1024).trim();
+}
+
+function safeReply(value: string | undefined): string {
+  return (value ?? "")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, "")
+    .trim()
+    .slice(0, 12000);
 }
 
 function errorMessage(error: unknown): string {

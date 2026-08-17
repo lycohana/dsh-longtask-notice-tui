@@ -29,6 +29,31 @@ describe("dsh-session adapter", () => {
     assert.equal(mapped?.request?.kind, "other");
   });
 
+  it("keeps the last visible assistant reply for the notification", () => {
+    const end = turnEnd(2, "completed");
+    const mapped = sessionEventToTaskEvent(session([
+      turnStart(0),
+      {
+        seq: 1,
+        time: 900,
+        type: "assistant/message",
+        data: {
+          turn: 1,
+          step: 1,
+          message: {
+            id: "message-1",
+            role: "assistant",
+            source: {kind: "model", provider: "test", model: "test-model"},
+            content: [{type: "text", text: "最终回复\n第二行"}],
+          },
+        },
+      } as unknown as SessionEvent,
+      end,
+    ]), end);
+
+    assert.equal(mapped?.lastReply, "最终回复\n第二行");
+  });
+
   it("recovers only the latest open turn from a session log", () => {
     const restored = session([
       turnStart(0),

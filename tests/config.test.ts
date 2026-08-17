@@ -22,4 +22,37 @@ describe("configuration", () => {
       ConfigurationError,
     );
   });
+
+  it("allows the sender address to fall back to the SMTP username", () => {
+    const config = normalizeConfig({channels: [{
+      type: "smtp",
+      id: "smtp",
+      host: "smtp.example.com",
+      port: 587,
+      secure: false,
+      username: "user@example.com",
+      from: "",
+      to: ["user@example.com"],
+    }]});
+    assert.equal((config.channels[0] as {from?: string}).from, "");
+  });
+
+  it("accepts the Bark official API default with a device key reference", () => {
+    const config = normalizeConfig({channels: [{
+      type: "bark",
+      id: "bark",
+      deviceKeyRef: "BARK_DEVICE_KEY",
+    }]});
+    const channel = config.channels[0];
+    assert.equal(channel?.type, "bark");
+    assert.equal(channel?.apiUrl, undefined);
+    assert.equal(channel?.deviceKeyRef, "BARK_DEVICE_KEY");
+  });
+
+  it("rejects credentials embedded in a Bark API URL", () => {
+    assert.throws(
+      () => normalizeConfig({channels: [{type: "bark", id: "bark", apiUrl: "https://user:pass@example.com", deviceKeyRef: "BARK_DEVICE_KEY"}]}),
+      ConfigurationError,
+    );
+  });
 });

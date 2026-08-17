@@ -98,7 +98,7 @@ describe("NotifierEngine", () => {
 
   it("sends one terminal notification and ignores duplicate events", async () => {
     const channel = new RecordingChannel("test");
-    const engine = new NotifierEngine({channels: [{type: "webhook", id: "test", url: "https://example.com/hook"}]}, new MemoryStateStore(), [channel]);
+    const engine = new NotifierEngine({thresholdSeconds: 5, channels: [{type: "webhook", id: "test", url: "https://example.com/hook"}]}, new MemoryStateStore(), [channel]);
     await engine.start();
 
     await engine.handle(event({eventId: "start", sequence: 1}));
@@ -108,6 +108,7 @@ describe("NotifierEngine", () => {
       sequence: 2,
       occurredAt: new Date(5000).toISOString(),
       summary: "Finished",
+      lastReply: "最终回复内容",
     }));
     const duplicate = await engine.handle(event({
       eventType: "task.completed",
@@ -121,6 +122,25 @@ describe("NotifierEngine", () => {
     assert.equal(duplicate.duplicate, true);
     assert.equal(channel.messages.length, 1);
     assert.equal(channel.messages[0]?.type, "completed");
+    assert.equal(channel.messages[0]?.lastReply, "最终回复内容");
+    assert.equal(engine.getStatus().terminalTasks, 1);
+  });
+
+  it("does not notify a terminal task that finishes before the threshold", async () => {
+    const channel = new RecordingChannel("test");
+    const engine = new NotifierEngine({thresholdSeconds: 600, channels: [{type: "webhook", id: "test", url: "https://example.com/hook"}]}, new MemoryStateStore(), [channel]);
+    await engine.start();
+
+    await engine.handle(event({eventId: "start", sequence: 1}));
+    const result = await engine.handle(event({
+      eventType: "task.completed",
+      eventId: "done",
+      sequence: 2,
+      occurredAt: new Date(5000).toISOString(),
+    }));
+
+    assert.equal(result.notificationsSent, 0);
+    assert.equal(channel.messages.length, 0);
     assert.equal(engine.getStatus().terminalTasks, 1);
   });
 
@@ -147,11 +167,11 @@ describe("NotifierEngine", () => {
 
   it("retries a failed channel with bounded attempts", async () => {
     const channel = new RecordingChannel("test", {accepted: false, detail: "offline"});
-    const engine = new NotifierEngine({retry: {maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0}, channels: [{type: "webhook", id: "test", url: "https://example.com/hook"}]}, new MemoryStateStore(), [channel]);
+    const engine = new NotifierEngine({thresholdSeconds: 1, retry: {maxAttempts: 2, baseDelayMs: 0, maxDelayMs: 0}, channels: [{type: "webhook", id: "test", url: "https://example.com/hook"}]}, new MemoryStateStore(), [channel]);
     await engine.start();
 
     await engine.handle(event({eventId: "start", sequence: 1}));
-    const result = await engine.handle(event({eventType: "task.failed", eventId: "failed", sequence: 2, error: {code: "E_TEST", summary: "failed"}}));
+    const result = await engine.handle(event({eventType: "task.failed", eventId: "failed", sequence: 2, occurredAt: new Date(1000).toISOString(), error: {code: "E_TEST", summary: "failed"}}));
 
     assert.equal(result.deliveryFailures, 1);
     assert.equal(channel.messages.length, 2);

@@ -1,4 +1,5 @@
 import type {
+  BarkChannelConfig,
   ChannelConfig,
   NormalizedConfig,
   NotificationConfig,
@@ -37,7 +38,7 @@ export function normalizeConfig(input: NotificationConfig): NormalizedConfig {
       baseDelayMs: input.retry?.baseDelayMs ?? DEFAULT_BASE_DELAY_MS,
       maxDelayMs: input.retry?.maxDelayMs ?? DEFAULT_MAX_DELAY_MS,
     },
-    channels: input.channels.map((channel) => ({...channel})),
+    channels: input.channels.map((channel) => ({...channel, enabled: channel.enabled ?? true})),
   };
 
   validateNumber("thresholdSeconds", config.thresholdSeconds, 1, 31536000);
@@ -67,6 +68,10 @@ function validateChannel(channel: ChannelConfig): void {
     validateSmtp(channel);
     return;
   }
+  if (channel.type === "bark") {
+    validateBark(channel);
+    return;
+  }
   validateWebhook(channel);
 }
 
@@ -75,7 +80,8 @@ function validateSmtp(channel: SmtpChannelConfig): void {
     throw new ConfigurationError("smtp.host must be a non-empty hostname");
   }
   validateNumber("smtp.port", channel.port, 1, 65535);
-  validateHeader("smtp.from", channel.from);
+  const sender = channel.from?.trim() || channel.username?.trim();
+  validateHeader("smtp.from or smtp.username", sender ?? "");
   if (!channel.to.length || channel.to.some((address) => !isEmail(address))) {
     throw new ConfigurationError("smtp.to must contain valid email addresses");
   }
@@ -84,6 +90,9 @@ function validateSmtp(channel: SmtpChannelConfig): void {
   }
   if (channel.passwordRef && !/^[A-Za-z_][A-Za-z0-9_:-]{1,127}$/.test(channel.passwordRef)) {
     throw new ConfigurationError("smtp.passwordRef is not a valid secret reference");
+  }
+  if (channel.displayName && /[\r\n]/.test(channel.displayName)) {
+    throw new ConfigurationError("smtp.displayName contains a line break");
   }
 }
 
@@ -109,6 +118,29 @@ function validateWebhook(channel: WebhookChannelConfig): void {
       throw new ConfigurationError(`invalid webhook header: ${name}`);
     }
   }
+}
+
+function validateBark(channel: BarkChannelConfig): void {
+  const apiUrl = channel.apiUrl?.trim() || "https://api.day.app";
+  let parsed: URL;
+  try {
+    parsed = new URL(apiUrl);
+  } catch {
+    throw new ConfigurationError(`invalid Bark API URL for ${channel.id}`);
+  }
+  if (parsed.username || parsed.password) {
+    throw new ConfigurationError("Bark API URL must not contain credentials");
+  }
+  if (parsed.protocol !== "https:" && !(channel.allowInsecureHttp && parsed.protocol === "http:")) {
+    throw new ConfigurationError("Bark API URL must use https unless allowInsecureHttp is enabled");
+  }
+  if (!channel.deviceKeyRef) {
+    throw new ConfigurationError("bark.deviceKeyRef must be configured");
+  }
+  if (!/^[A-Za-z_][A-Za-z0-9_:-]{1,127}$/.test(channel.deviceKeyRef)) {
+    throw new ConfigurationError("bark.deviceKeyRef is not a valid secret reference");
+  }
+  validateNumber(`${channel.id}.timeoutMs`, channel.timeoutMs ?? 10000, 100, 120000);
 }
 
 function validateHeader(name: string, value: string): void {
